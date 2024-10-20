@@ -4,9 +4,10 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from twilio.twiml.messaging_response import MessagingResponse
 
-from WhatsAppBot import settings
+
 from .models import Client, Photo
-from .twilio_client import TwilioClient
+from bot.twilio_client import TwilioClient
+from bot.tasks import send_delayed_message
 
 
 class WhatsAppBotView(APIView):
@@ -14,6 +15,8 @@ class WhatsAppBotView(APIView):
     welcome_template_sid = "HXca07df4d5dbc1c601f5ccb1c61380f44"
     confirmation_template_sid = "HX4f750707d8cffc465b777d0fabfad8b8"
     photo_request_template_sid = "HX0fb4fdb4d4a8d13f4ea9f61206afdfee"
+    ask_anfrage_formular_sid = "HX565a986c2d40a5be32edd052cdfbbb34"
+    visit_anfrage_formular = "HX68b22df274fc078132cea73a117ca96b"
 
     def __init__(self, *args, **kwargs):
         self.twilio_client = TwilioClient()
@@ -42,6 +45,8 @@ class WhatsAppBotView(APIView):
             self.handle_photo_upload(client, media_urls)
         elif state == 'CONFIRM_PHOTOS':
             self.handle_photo_confirmation(client, body)
+        elif state == 'ANFRAGE_FORMULAR':
+            self.handle_anfrage_formular(client, body)
 
         return HttpResponse(status=200)
 
@@ -79,8 +84,7 @@ class WhatsAppBotView(APIView):
             else:
                 self.twilio_client.send_message(
                     client.phone_number,
-                    "Bitte geben Sie Ihren Vor- und Nachnamen in folgendem Format ein 'Bernhard Schmid'."
-                )
+                    "Bitte geben Sie Ihren Vor- und Nachnamen in folgendem Format ein 'Bernhard Schmid'.")
 
     def handle_name_confirmation(self, client, body):
         message = 'Bitte laden Sie 10 bis 20 Fotos von Ihren Möbeln und Gegenständen in der Wohnung hoch'
@@ -93,43 +97,66 @@ class WhatsAppBotView(APIView):
         else:
             self.twilio_client.send_message(
                 client.phone_number,
-                "Bitte geben Sie Ihren Vor- und Nachnamen in folgendem Format ein 'Bernhard Schmid'."
+                "Bitte geben Sie Ihren Vor - und Nachnamen in folgendem Format ein 'Bernhard Schmid'."
             )
             client.state = 'WAITING_FOR_NAME'
         client.save()
 
     def handle_photo_upload(self, client, media_urls):
-        if media_urls:
-            client.temp_media_urls.extend(media_urls)
-            client.save()
 
-        self.twilio_client.send_template_message(
-            client.phone_number,
-            self.photo_request_template_sid,
-        )
-        client.state = 'CONFIRM_PHOTOS'
-        client.save()
+        if media_urls:
+            Photo.objects.create(client=client, photo_url=media_urls)
+
+            send_delayed_message.apply_async((client.id,), countdown=5)
+
+        return HttpResponse(status=200)
 
     def handle_photo_confirmation(self, client, body):
-        if body.lower() == 'да':
-            for media_url in client.temp_media_urls:
-                Photo.objects.create(client=client, photo_url=media_url)
+        if body.lower() == 'ja':
 
             self.notify_managers(client)
-            self.twilio_client.send_message(
-                client.phone_number, "Спасибо! Ваши данные и фотографии получены."
+            self.twilio_client.send_template_message(
+                client.phone_number,
+                template_sid=self.ask_anfrage_formular_sid
             )
-            client.state = 'INIT'
-            client.temp_media_urls = []
+            client.state = 'ANFRAGE_FORMULAR'
         else:
             self.twilio_client.send_message(
-                client.phone_number, "Пожалуйста, загрузите оставшиеся фотографии."
+                client.phone_number, "Bitte laden Sie die restlichen Fotos hoch."
             )
             client.state = 'WAITING_FOR_PHOTOS'
         client.save()
 
+    def handle_anfrage_formular(self, client, body):
+        if body.lower() == 'ja':
+
+            self.twilio_client.send_message(
+                client.phone_number,
+                "Wir haben Ihre Angaben erhalten, Sie werden in Kürze ein Angebot per Post erhalten."
+            )
+            client.state = 'INIT'
+        else:
+            self.twilio_client.send_template_message(
+                client.phone_number,
+                self.visit_anfrage_formular
+            )
+            client.state = 'INIT'
+        client.save()
+
     def notify_managers(self, client):
-        managers = ['manager1_phone_number', 'manager2_phone_number']
-        for manager in managers:
-            message_body = f"Новый клиент: {client.first_name} {client.last_name}\nФотографии: {', '.join(photo.photo_url for photo in client.photos.all())}"
-            self.twilio_client.send_message(manager, message_body)
+        managers = "whatsapp:+380634429319"
+        photo_urls = [photo.photo_url for photo in client.photos.all()]
+
+        if photo_urls:
+            message_body = (f"Новый клиент: {client.first_name} {client.last_name}\n"
+                            f"Фотографии: {', '.join(photo_urls)}")
+        else:
+            message_body = (f"Новый клиент: {client.first_name} {client.last_name}\n"
+                            f"Фотографии не загружены.")
+
+
+            try:
+                self.twilio_client.send_message(managers, message_body)
+                print(f"Сообщение успешно отправлено менеджеру: {managers}")
+            except Exception as e:
+                print(f"Ошибка при отправке сообщения менеджеру {managers}: {e}")

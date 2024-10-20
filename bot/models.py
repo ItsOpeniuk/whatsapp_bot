@@ -1,3 +1,4 @@
+from django.utils import timezone
 from django.db import models
 
 
@@ -15,3 +16,4 @@ class Client(models.Model):
 class Photo(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='photos')
     photo_url = models.URLField(max_length=200)
+    created_at = models.DateTimeField(auto_now_add=True)

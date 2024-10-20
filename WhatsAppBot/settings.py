@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'django_filters',
     'twilio',
+    'django_celery_results',
 
     # local
     'bot.apps.BotConfig',
@@ -146,3 +147,16 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_ALWAYS_EAGER = False  # Убедитесь, что это значение False для асинхронных задач
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_ENABLE_UTC = True
+
+from .celery import app as celery_app
+__all__ = ('celery_app',)
